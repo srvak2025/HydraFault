@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 
 import joblib
 import pandas as pd
@@ -33,11 +35,31 @@ classifies component health, explains the prediction, and turns it into a mainte
 )
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner="Loading HydraFault data...")
 def cached_dataset():
+    raw_dir = PROJECT_ROOT / "data" / "raw"
+    has_profile = (raw_dir / "profile.txt").exists() or any(raw_dir.rglob("profile.txt"))
+
+    if not has_profile:
+        subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "scripts" / "download_data.py")],
+            check=True,
+        )
+
     sensors, profile = load_dataset()
     summary = summarize_dataset()
-    features = build_feature_table(sensors)
+
+    processed_dir = PROJECT_ROOT / "data" / "processed"
+    processed_dir.mkdir(parents=True, exist_ok=True)
+
+    feature_file = processed_dir / "features_accumulator.csv"
+
+    if feature_file.exists():
+        features = pd.read_csv(feature_file)
+    else:
+        features = build_feature_table(sensors)
+        features.to_csv(feature_file, index=False)
+
     return sensors, profile, summary, features
 
 
