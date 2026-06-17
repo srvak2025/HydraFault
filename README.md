@@ -118,14 +118,18 @@ HydraFault tests simple and practical models:
 
 Deep learning is intentionally not required for the first version because this project is focused on reliable feature engineering, evaluation, and explainable engineering decisions.
 
-## What to show a professor
+## Limitations
 
-1. The dashboard.
-2. The model comparison table.
-3. The top feature importance plot.
-4. A selected test run with predicted fault condition.
-5. The README section explaining why each model was used.
+This is a prototype system built for applied machine learning experimentation. The model currently uses engineered statistical and windowed features rather than deep sequence models. This makes the system easier to explain, but it may miss more complex temporal patterns that could be captured by recurrent or convolutional time-series models.
 
-## Example pitch
+The dashboard is intended as a demonstration tool, not a production monitoring system.
 
-> I built HydraFault to demonstrate hands-on ML implementation on engineering time-series data. It converts raw hydraulic sensor cycles into statistical and windowed features, compares multiple classification models, explains which sensor signals drive predictions, and turns the result into a maintenance recommendation.
+## Future Work
+
+* Add support for multiple prediction targets in one unified dashboard.
+* Compare feature-based models against LSTM, GRU, or 1D-CNN sequence models.
+* Add SHAP explanations for individual predictions.
+* Improve dashboard startup speed by loading precomputed feature artifacts.
+* Add upload support for new hydraulic sensor runs.
+* Package the app for cloud deployment.
+
