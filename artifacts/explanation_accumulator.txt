@@ -1,0 +1,9 @@
+The model's prediction is driven most strongly by these engineered sensor features:
+
+- SE mid50 range
+- SE mid50 std
+- FS1 mid50 std
+- SE mid50 slope
+- PS3 first25 std
+
+Interpretation: features involving late-cycle drift, standard deviation, range, or slope suggest that the model is detecting instability and degradation patterns over time rather than only comparing raw average sensor readings.
