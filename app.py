@@ -1,22 +1,24 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
-import subprocess
-import sys
 
 import joblib
 import pandas as pd
-import plotly.graph_objects as go
+import plotly.express as px
 import streamlit as st
 
-from src.features import build_feature_table
-from src.load_data import load_dataset, summarize_dataset, TARGET_COLUMNS
 from src.recommend import describe_label, make_recommendation
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-MODELS_DIR = PROJECT_ROOT / "models"
-ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
-VISUALS_DIR = PROJECT_ROOT / "visuals"
+
+TARGET = "accumulator"
+
+MODEL_PATH = PROJECT_ROOT / "models" / "best_model_accumulator.joblib"
+FEATURES_PATH = PROJECT_ROOT / "data" / "processed" / "features_accumulator.csv"
+LABELS_PATH = PROJECT_ROOT / "data" / "processed" / "labels_accumulator.csv"
+COMPARISON_PATH = PROJECT_ROOT / "artifacts" / "model_comparison_accumulator.csv"
+IMPORTANCE_PATH = PROJECT_ROOT / "artifacts" / "feature_importance_accumulator.csv"
+EXPLANATION_PATH = PROJECT_ROOT / "artifacts" / "explanation_accumulator.txt"
 
 st.set_page_config(
     page_title="HydraFault",
@@ -29,219 +31,192 @@ st.subheader("Explainable Time-Series Health Monitoring for Hydraulic Systems")
 
 st.markdown(
     """
-HydraFault takes hydraulic sensor time-series data, extracts engineering features,
-classifies component health, explains the prediction, and turns it into a maintenance recommendation.
+HydraFault is a prototype ML dashboard for hydraulic system condition monitoring.
+It uses engineered time-series features, compares classification models, explains
+important sensor signals, and generates a maintenance recommendation.
 """
 )
 
 
-@st.cache_data(show_spinner="Loading HydraFault data...")
-def cached_dataset():
-    raw_dir = PROJECT_ROOT / "data" / "raw"
-    has_profile = (raw_dir / "profile.txt").exists() or any(raw_dir.rglob("profile.txt"))
+@st.cache_data(show_spinner="Loading precomputed HydraFault artifacts...")
+def load_artifacts():
+    missing = [
+        str(path)
+        for path in [MODEL_PATH, FEATURES_PATH, LABELS_PATH, COMPARISON_PATH, IMPORTANCE_PATH]
+        if not path.exists()
+    ]
 
-    if not has_profile:
-        subprocess.run(
-            [sys.executable, str(PROJECT_ROOT / "scripts" / "download_data.py")],
-            check=True,
-        )
+    if missing:
+        return None, missing
 
-    sensors, profile = load_dataset()
-    summary = summarize_dataset()
+    features = pd.read_csv(FEATURES_PATH)
+    labels = pd.read_csv(LABELS_PATH)
+    comparison = pd.read_csv(COMPARISON_PATH)
+    importance = pd.read_csv(IMPORTANCE_PATH)
 
-    processed_dir = PROJECT_ROOT / "data" / "processed"
-    processed_dir.mkdir(parents=True, exist_ok=True)
+    explanation = ""
+    if EXPLANATION_PATH.exists():
+        explanation = EXPLANATION_PATH.read_text(encoding="utf-8")
 
-    feature_file = processed_dir / "features_accumulator.csv"
-
-    if feature_file.exists():
-        features = pd.read_csv(feature_file)
-    else:
-        features = build_feature_table(sensors)
-        features.to_csv(feature_file, index=False)
-
-    return sensors, profile, summary, features
-
-
-def load_model_bundle(target: str):
-    path = MODELS_DIR / f"best_model_{target}.joblib"
-    if not path.exists():
-        return None
-    return joblib.load(path)
+    return {
+        "features": features,
+        "labels": labels,
+        "comparison": comparison,
+        "importance": importance,
+        "explanation": explanation,
+    }, []
 
 
-def get_prediction_confidence(model, X_row: pd.DataFrame, predicted_label: str) -> float | None:
-    if not hasattr(model, "predict_proba"):
-        return None
-
-    probs = model.predict_proba(X_row)[0]
-    classes = [str(c) for c in model.classes_]
-
-    if str(predicted_label) not in classes:
-        return None
-
-    idx = classes.index(str(predicted_label))
-    return float(probs[idx])
+@st.cache_resource(show_spinner="Loading trained model...")
+def load_model():
+    return joblib.load(MODEL_PATH)
 
 
-def plot_sensor_cycle(sensor_matrix: pd.DataFrame, cycle_id: int, sensor_name: str):
-    values = sensor_matrix.iloc[cycle_id].to_numpy()
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=list(range(len(values))),
-            y=values,
-            mode="lines",
-            name=sensor_name,
-        )
-    )
-    fig.update_layout(
-        title=f"{sensor_name} Time-Series for Cycle {cycle_id}",
-        xaxis_title="Sample index within cycle",
-        yaxis_title="Sensor value",
-        height=380,
-    )
-    return fig
+data, missing = load_artifacts()
 
+if missing:
+    st.error("Missing required deployment files.")
+    st.write("These files were not found:")
+    for item in missing:
+        st.code(item)
+    st.stop()
 
-try:
-    sensors, profile, summary, features = cached_dataset()
-except Exception as exc:
-    st.error("Dataset not found or could not be loaded.")
-    st.code("python scripts/download_data.py")
-    st.info("If the download fails, manually unzip the UCI Hydraulic Systems dataset into data/raw/.")
-    st.exception(exc)
+model_bundle = load_model()
+model = model_bundle["model"]
+model_name = model_bundle.get("best_model_name", "trained model")
+
+features = data["features"]
+labels = data["labels"]
+comparison = data["comparison"]
+importance = data["importance"]
+explanation = data["explanation"]
+
+if TARGET not in labels.columns:
+    st.error(f"Expected label column '{TARGET}' in labels file.")
     st.stop()
 
 with st.sidebar:
     st.header("Controls")
-
-    target = st.selectbox(
-        "Prediction target",
-        TARGET_COLUMNS,
-        index=TARGET_COLUMNS.index("accumulator") if "accumulator" in TARGET_COLUMNS else 0,
-    )
-
     cycle_id = st.number_input(
-        "Test cycle ID",
+        "Cycle ID",
         min_value=0,
-        max_value=len(profile) - 1,
-        value=min(100, len(profile) - 1),
+        max_value=len(features) - 1,
+        value=min(100, len(features) - 1),
         step=1,
     )
 
-    sensor_name = st.selectbox("Sensor to visualize", sorted(sensors.keys()))
-
     st.markdown("---")
-    st.caption("Train first if model is missing:")
-    st.code(f"python -m src.train --target {target}", language="bash")
+    st.caption("Deployment mode")
+    st.success("Using precomputed features and trained model")
 
 
-tab_overview, tab_predict, tab_models, tab_explain = st.tabs(
+tab_dataset, tab_prediction, tab_models, tab_explain = st.tabs(
     ["Dataset", "Prediction", "Model Comparison", "Explainability"]
 )
 
-with tab_overview:
+with tab_dataset:
     st.header("Dataset Overview")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.write("Sensor files loaded:")
-        st.dataframe(summary, use_container_width=True)
+        st.metric("Operating cycles", len(features))
 
     with col2:
-        st.write("Condition labels:")
-        st.dataframe(profile.head(12), use_container_width=True)
+        st.metric("Engineered features", features.shape[1])
 
-    st.plotly_chart(plot_sensor_cycle(sensors[sensor_name], int(cycle_id), sensor_name), use_container_width=True)
+    with col3:
+        st.metric("Target", TARGET)
 
-with tab_predict:
+    st.markdown("### Accumulator condition distribution")
+    label_counts = labels[TARGET].astype(str).value_counts().reset_index()
+    label_counts.columns = ["condition", "count"]
+    label_counts["meaning"] = label_counts["condition"].apply(lambda x: describe_label(TARGET, x))
+    st.dataframe(label_counts, use_container_width=True)
+
+    fig = px.bar(
+        label_counts,
+        x="meaning",
+        y="count",
+        title="Accumulator Condition Distribution",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("### Sample engineered feature table")
+    st.dataframe(features.head(20), use_container_width=True)
+
+with tab_prediction:
     st.header("Health Classification")
 
-    bundle = load_model_bundle(target)
+    X_row = features.iloc[[int(cycle_id)]]
+    predicted = str(model.predict(X_row)[0])
+    actual = str(labels.iloc[int(cycle_id)][TARGET])
 
-    if bundle is None:
-        st.warning(f"No trained model found for target: {target}")
-        st.code(f"python -m src.train --target {target}", language="bash")
-    else:
-        model = bundle["model"]
-        model_name = bundle["best_model_name"]
+    confidence = None
+    if hasattr(model, "predict_proba"):
+        probs = model.predict_proba(X_row)[0]
+        classes = [str(c) for c in model.classes_]
+        if predicted in classes:
+            confidence = float(probs[classes.index(predicted)])
 
-        X_row = features.iloc[[int(cycle_id)]]
-        predicted = str(model.predict(X_row)[0])
-        confidence = get_prediction_confidence(model, X_row, predicted)
+    top_features = importance["feature"].head(5).tolist()
 
-        true_label = str(profile.iloc[int(cycle_id)][target])
-        top_features = []
+    col1, col2, col3 = st.columns(3)
 
-        importance_path = ARTIFACTS_DIR / f"feature_importance_{target}.csv"
-        if importance_path.exists():
-            importance_df = pd.read_csv(importance_path)
-            top_features = importance_df["feature"].head(5).tolist()
+    with col1:
+        st.metric("Model", model_name)
 
-        col1, col2, col3 = st.columns(3)
+    with col2:
+        st.metric("Predicted condition", describe_label(TARGET, predicted))
 
-        with col1:
-            st.metric("Best model", model_name)
-
-        with col2:
-            st.metric("Predicted condition", describe_label(target, predicted))
-
-        with col3:
-            if confidence is not None:
-                st.metric("Confidence", f"{confidence * 100:.1f}%")
-            else:
-                st.metric("Confidence", "N/A")
-
-        st.markdown("### Ground truth")
-        st.write(f"Actual label for this cycle: **{describe_label(target, true_label)}**")
-
-        st.markdown("### Maintenance recommendation")
-        st.success(make_recommendation(target, predicted, top_features))
-
-        st.markdown("### Top evidence features")
-        if top_features:
-            for i, feature in enumerate(top_features, start=1):
-                st.write(f"{i}. `{feature}`")
+    with col3:
+        if confidence is not None:
+            st.metric("Confidence", f"{confidence * 100:.1f}%")
         else:
-            st.info("Train the model to generate feature importance.")
+            st.metric("Confidence", "N/A")
+
+    st.markdown("### Ground truth")
+    st.write(f"Actual condition for cycle `{cycle_id}`: **{describe_label(TARGET, actual)}**")
+
+    st.markdown("### Maintenance recommendation")
+    st.success(make_recommendation(TARGET, predicted, top_features))
+
+    st.markdown("### Top evidence features")
+    for i, feature in enumerate(top_features, start=1):
+        st.write(f"{i}. `{feature}`")
+
+    st.markdown("### Selected cycle feature values")
+    selected_values = X_row[top_features].T.reset_index()
+    selected_values.columns = ["feature", "value"]
+    st.dataframe(selected_values, use_container_width=True)
 
 with tab_models:
     st.header("Model Comparison")
+    st.dataframe(comparison, use_container_width=True)
 
-    comparison_path = ARTIFACTS_DIR / f"model_comparison_{target}.csv"
-    if comparison_path.exists():
-        comparison = pd.read_csv(comparison_path)
-        st.dataframe(comparison, use_container_width=True)
-
-        st.markdown(
-            """
-**Model-selection logic:** Logistic regression is a baseline. Tree-based models are strong here because the project converts
-sensor cycles into nonlinear tabular features like slopes, ranges, RMS values, and late-cycle instability shifts.
+    st.markdown(
+        """
+**Model-selection logic:** Logistic regression provides a baseline. Tree-based models
+are effective here because the system converts raw time-series sensor cycles into
+nonlinear tabular features such as RMS, slope, range, late-cycle drift, and instability shifts.
 """
-        )
-    else:
-        st.warning("No model comparison file found.")
-        st.code(f"python -m src.train --target {target}", language="bash")
+    )
 
 with tab_explain:
     st.header("Explainability")
 
-    importance_path = ARTIFACTS_DIR / f"feature_importance_{target}.csv"
-    explanation_path = ARTIFACTS_DIR / f"explanation_{target}.txt"
-    importance_img = VISUALS_DIR / f"feature_importance_{target}.png"
+    top = importance.head(20).copy()
+    st.dataframe(top, use_container_width=True)
 
-    if importance_path.exists():
-        importance = pd.read_csv(importance_path)
-        st.dataframe(importance.head(20), use_container_width=True)
+    fig = px.bar(
+        top.iloc[::-1],
+        x="importance",
+        y="feature",
+        orientation="h",
+        title="Top Feature Importances",
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-        if importance_img.exists():
-            st.image(str(importance_img), caption="Top feature importance")
-
-        if explanation_path.exists():
-            st.markdown("### Interpretation")
-            st.write(explanation_path.read_text(encoding="utf-8"))
-    else:
-        st.warning("No explainability artifacts found.")
-        st.code(f"python -m src.train --target {target}", language="bash")
+    if explanation:
+        st.markdown("### Interpretation")
+        st.write(explanation)
