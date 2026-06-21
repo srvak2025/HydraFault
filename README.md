@@ -2,7 +2,7 @@
 
 **Explainable Time-Series Health Monitoring for Hydraulic Systems**
 
-HydraFault is a fast, professor-ready ML project that takes raw hydraulic sensor time-series data, extracts engineering features, trains classification models, explains the prediction, and displays the result in a Streamlit dashboard.
+HydraFault is an ML project that takes raw hydraulic sensor time-series data, extracts engineering features, trains classification models, explains the prediction, and displays the result in a Streamlit dashboard.
 
 ## What it demonstrates
 
